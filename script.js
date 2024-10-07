@@ -1,90 +1,225 @@
-const messageBar = document.querySelector(".bar-wrapper input");
-const sendBtn = document.querySelector(".bar-wrapper button");
-const messageBox = document.querySelector(".message-box");
-const voiceButton = document.getElementById('voiceButton');
+const typingForm = document.querySelector(".typing-form");
+const chatContainer = document.querySelector(".chat-list");
+const suggestions = document.querySelectorAll(".suggestion");
+const toggleThemeButton = document.querySelector("#theme-toggle-button");
+const deleteChatButton = document.querySelector("#delete-chat-button");
+const voiceInputButton = document.createElement("span"); // Create voice button
+voiceInputButton.id = "voice-input-button";
+voiceInputButton.classList.add("icon", "material-symbols-rounded");
+voiceInputButton.innerText = "mic";
 
-let API_URL = "https://api.openai.com/v1/chat/completions";
-let API_KEY = "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"; // Add your API key here
+// Insert voice button between input bar and theme button
+const actionButtons = document.querySelector(".action-buttons");
+actionButtons.insertBefore(voiceInputButton, toggleThemeButton);
 
-sendBtn.onclick = function() {
-  if (messageBar.value.length > 0) {
-    const UserTypedMessage = messageBar.value;
-    messageBar.value = "";
+// State variables
+let userMessage = null;
+let isResponseGenerating = false;
+let voiceTimeout;
 
-    let message = `
-      <div class="chat message">
-        <img src="img/user.jpg">
-        <span>${UserTypedMessage}</span>
-      </div>`;
+// API configuration
+const API_KEY ="AIzaSyAbNHG6b5RpQBC96yqPaMKEj75Apkl3_gI"; // Your API key here
+const API_URL = `https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=${API_KEY}`;
 
-    let response = `
-      <div class="chat response">
-        <img src="img/chatbot.jpg">
-        <span class="new">...</span>
-      </div>`;
+// Load theme and chat data from local storage on page load
+const loadDataFromLocalstorage = () => {
+  const savedChats = localStorage.getItem("saved-chats");
+  const isLightMode = (localStorage.getItem("themeColor") === "light_mode");
 
-    messageBox.insertAdjacentHTML("beforeend", message);
+  // Apply the stored theme
+  document.body.classList.toggle("light_mode", isLightMode);
+  toggleThemeButton.innerText = isLightMode ? "dark_mode" : "light_mode";
 
-    setTimeout(() => {
-      messageBox.insertAdjacentHTML("beforeend", response);
+  // Restore saved chats or clear the chat container
+  chatContainer.innerHTML = savedChats || '';
+  document.body.classList.toggle("hide-header", savedChats);
 
-      const requestOptions = {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${API_KEY}`
-        },
-        body: JSON.stringify({
-          "model": "gpt-3.5-turbo",
-          "messages": [{ "role": "user", "content": UserTypedMessage }]
-        })
-      };
+  chatContainer.scrollTo(0, chatContainer.scrollHeight); // Scroll to the bottom
+}
 
-      fetch(API_URL, requestOptions)
-        .then(res => res.json())
-        .then(data => {
-          const ChatBotResponse = document.querySelector(".response .new");
-          ChatBotResponse.innerHTML = data.choices[0].message.content;
-          readOutLoud(ChatBotResponse.innerHTML); // Read the response
-          ChatBotResponse.classList.remove("new");
-        })
-        .catch((error) => {
-          const ChatBotResponse = document.querySelector(".response .new");
-          ChatBotResponse.innerHTML = "Oops! An error occurred. Please try again.";
-          readOutLoud(ChatBotResponse.innerHTML); // Read the error response
-        });
-    }, 100);
-  }
-};
+// Create a new message element and return it
+const createMessageElement = (content, ...classes) => {
+  const div = document.createElement("div");
+  div.classList.add("message", ...classes);
+  div.innerHTML = content;
+  return div;
+}
 
-// Voice recognition setup
-const recognition = new(window.SpeechRecognition || window.webkitSpeechRecognition)();
-recognition.lang = 'en-US';
-recognition.interimResults = false;
+// Show typing effect by displaying words one by one
+const showTypingEffect = (text, textElement, incomingMessageDiv) => {
+  const words = text.split(' ');
+  let currentWordIndex = 0;
 
-voiceButton.addEventListener('click', () => {
-  recognition.start();
-});
+  const typingInterval = setInterval(() => {
+    // Append each word to the text element with a space
+    textElement.innerText += (currentWordIndex === 0 ? '' : ' ') + words[currentWordIndex++];
+    incomingMessageDiv.querySelector(".icon").classList.add("hide");
 
-recognition.onresult = (event) => {
-  const transcript = event.results[0][0].transcript;
-  messageBar.value = transcript;
-
-  // Auto-send the message if no response within 2 seconds
-  setTimeout(() => {
-    if (messageBar.value === transcript) {
-      sendBtn.click();
+    // If all words are displayed
+    if (currentWordIndex === words.length) {
+      clearInterval(typingInterval);
+      isResponseGenerating = false;
+      incomingMessageDiv.querySelector(".icon").classList.remove("hide");
+      localStorage.setItem("saved-chats", chatContainer.innerHTML); // Save chats to local storage
+      readResponseAloud(text); // Read the response aloud
     }
-  }, 2000);
-};
+    chatContainer.scrollTo(0, chatContainer.scrollHeight); // Scroll to the bottom
+  }, 75);
+}
 
-// Function to read out the chatbot's response
-function readOutLoud(message) {
-  if ('speechSynthesis' in window) {
-    const speech = new SpeechSynthesisUtterance(message);
-    speech.lang = 'en-US';
-    window.speechSynthesis.speak(speech);
-  } else {
-    console.error('Speech synthesis is not supported in this browser.');
+// Fetch response from the API based on user message
+const generateAPIResponse = async (incomingMessageDiv) => {
+  const textElement = incomingMessageDiv.querySelector(".text"); // Getting text element
+
+  try {
+    // Send a POST request to the API with the user's message
+    const response = await fetch(API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ 
+        contents: [{ 
+          role: "user", 
+          parts: [{ text: userMessage }] 
+        }] 
+      }),
+    });
+
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error.message);
+
+    // Get the API response text and remove asterisks from it
+    const apiResponse = data?.candidates[0].content.parts[0].text.replace(/\*\*(.*?)\*\*/g, '$1');
+    showTypingEffect(apiResponse, textElement, incomingMessageDiv); // Show typing effect
+  } catch (error) { // Handle error
+    isResponseGenerating = false;
+    textElement.innerText = error.message;
+    textElement.parentElement.closest(".message").classList.add("error");
+  } finally {
+    incomingMessageDiv.classList.remove("loading");
   }
 }
+
+// Show a loading animation while waiting for the API response
+const showLoadingAnimation = () => {
+  const html = `<div class="message-content">
+                  <img class="avatar" src="gemini.svg" alt="Gemini avatar">
+                  <p class="text"></p>
+                  <div class="loading-indicator">
+                    <div class="loading-bar"></div>
+                    <div class="loading-bar"></div>
+                    <div class="loading-bar"></div>
+                  </div>
+                </div>
+                <span onClick="copyMessage(this)" class="icon material-symbols-rounded">content_copy</span>`;
+
+  const incomingMessageDiv = createMessageElement(html, "incoming", "loading");
+  chatContainer.appendChild(incomingMessageDiv);
+
+  chatContainer.scrollTo(0, chatContainer.scrollHeight); // Scroll to the bottom
+  generateAPIResponse(incomingMessageDiv);
+}
+
+// Copy message text to the clipboard
+const copyMessage = (copyButton) => {
+  const messageText = copyButton.parentElement.querySelector(".text").innerText;
+
+  navigator.clipboard.writeText(messageText);
+  copyButton.innerText = "done"; // Show confirmation icon
+  setTimeout(() => copyButton.innerText = "content_copy", 1000); // Revert icon after 1 second
+}
+
+// Handle sending outgoing chat messages
+const handleOutgoingChat = () => {
+  userMessage = typingForm.querySelector(".typing-input").value.trim() || userMessage;
+  if (!userMessage || isResponseGenerating) return; // Exit if there is no message or response is generating
+
+  isResponseGenerating = true;
+
+  const html = `<div class="message-content">
+                  <img class="avatar" src="user.jpg" alt="User avatar">
+                  <p class="text"></p>
+                </div>`;
+
+  const outgoingMessageDiv = createMessageElement(html, "outgoing");
+  outgoingMessageDiv.querySelector(".text").innerText = userMessage;
+  chatContainer.appendChild(outgoingMessageDiv);
+  
+  typingForm.reset(); // Clear input field
+  document.body.classList.add("hide-header");
+  chatContainer.scrollTo;(0, chatContainer.scrollHeight); // Scroll to the bottom
+  setTimeout(showLoadingAnimation, 500); // Show loading animation after a delay
+}
+
+// Speech recognition and voice input handling
+const startVoiceRecognition = () => {
+  const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+  recognition.lang = 'en-US';
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+
+  recognition.start();
+
+  recognition.onresult = (event) => {
+    userMessage = event.results[0][0].transcript;
+    typingForm.querySelector(".typing-input").value = userMessage;
+  };
+
+  recognition.onspeechend = () => {
+    recognition.stop();
+
+    // If no voice input for 2 seconds, send the message automatically
+    voiceTimeout = setTimeout(() => handleOutgoingChat(), 2000);
+  };
+
+  recognition.onerror = (event) => {
+    console.error("Speech recognition error detected:", event.error);
+  };
+}
+
+// Read the response aloud using the Web Speech API
+const readResponseAloud = (responseText) => {
+  const synth = window.speechSynthesis;
+  const utterance = new SpeechSynthesisUtterance(responseText);
+  utterance.pitch = 1;
+  utterance.rate = 1;
+  utterance.volume = 1;
+  utterance.voice = synth.getVoices().find(voice => voice.name.includes('Google UK English Male')) || synth.getVoices()[0];
+  synth.speak(utterance);
+}
+
+// Toggle between light and dark themes
+toggleThemeButton.addEventListener("click", () => {
+  const isLightMode = document.body.classList.toggle("light_mode");
+  localStorage.setItem("themeColor", isLightMode ? "light_mode" : "dark_mode");
+  toggleThemeButton.innerText = isLightMode ? "dark_mode" : "light_mode";
+});
+
+// Delete all chats from local storage when button is clicked
+deleteChatButton.addEventListener("click", () => {
+  if (confirm("Are you sure you want to delete all the chats?")) {
+    localStorage.removeItem("saved-chats");
+    loadDataFromLocalstorage();
+  }
+});
+
+// Set userMessage and handle outgoing chat when a suggestion is clicked
+suggestions.forEach(suggestion => {
+  suggestion.addEventListener("click", () => {
+    userMessage = suggestion.querySelector(".text").innerText;
+    handleOutgoingChat();
+  });
+});
+
+// Start voice recognition when voice button is clicked
+voiceInputButton.addEventListener("click", () => {
+  clearTimeout(voiceTimeout); // Clear any previous timeout
+  startVoiceRecognition(); // Start speech recognition
+});
+
+// Prevent default form submission and handle outgoing chat
+typingForm.addEventListener("submit", (e) => {
+  e.preventDefault(); 
+  handleOutgoingChat();
+});
+
+loadDataFromLocalstorage();
