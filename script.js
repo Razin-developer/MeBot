@@ -18,7 +18,7 @@ let isResponseGenerating = false;
 let voiceTimeout;
 
 // API configuration
-const API_KEY ="AIzaSyAbNHG6b5RpQBC96yqPaMKEj75Apkl3_gI"; // Your API key here
+const API_KEY ="AIzaSyDSEg4eBbgmBiumBMwJtkqHlms22yHh_c4"; // Your API key here
 const API_URL = `https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=${API_KEY}`;
 
 // Load theme and chat data from local storage on page load
